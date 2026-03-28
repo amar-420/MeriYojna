@@ -1,4 +1,6 @@
 from flask import Flask, request, jsonify, render_template
+from flask import redirect, url_for
+
 from googletrans import Translator
 import sqlite3
 
@@ -89,6 +91,22 @@ schemes = {
 # ---------------- Routes ----------------
 @app.route("/")
 def home():
+    return render_template("login.html")
+
+@app.route("/login", methods=["POST"])
+def login():
+    username = request.form.get("username")
+    password = request.form.get("password")
+
+    # Simple check (you can upgrade later with DB)
+    if username == "admin" and password == "1234":
+        return redirect(url_for("index"))
+    else:
+        return "Invalid Credentials ❌"
+    
+
+@app.route("/index")
+def index():
     return render_template("index.html")
 
 # ---------------- Eligibility (Selector) ----------------
