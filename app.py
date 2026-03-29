@@ -3,9 +3,19 @@ from flask import redirect, url_for
 
 from googletrans import Translator
 import sqlite3
+import pandas as pd
+import os
 
 app = Flask(__name__)
 translator = Translator()
+
+# ---------------- Load Schemes (CSV) ----------------
+def load_schemes():
+    df = pd.read_csv("schemes.csv")
+    df.fillna("", inplace=True)
+    return df.to_dict(orient="records")
+
+ALL_SCHEMES = load_schemes()
 
 # ---------------- DB ----------------
 def init_db():
@@ -64,51 +74,36 @@ def smart_selector(age, income, occupation):
 
     return schemes
 
-# ---------------- Schemes ----------------
-schemes = {
-    "pm kisan": {
-        "info": "PM Kisan Scheme: In this Farmers get ₹6000 per year.",
-        "link": "https://pmkisan.gov.in/",
-        "eligibility": "\n1)You must be a farmer.\n2)You should have agricultural land."
-    },
-    "ayushman bharat": {
-        "info": "Ayushman Bharat : In this citizens can get free health insurance up to ₹5 lakh.",
-        "link": "https://pmjay.gov.in/",
-        "eligibility": "Families listed in SECC database are eligible."
-    },
-    "ujjwala": {
-        "info": "Ujjwala Yojna : Free LPG connection for poor families.",
-        "link": "https://www.pmuy.gov.in/",
-        "eligibility": "Women from BPL households can apply."
-    },
-    "taem": {
-        "info": "Renuka (Leader),Harsha(representator),Prathamesh(frontend Developer),Amar(Backend developer)",
-        "link": "https://www.pmuy.gov.in/",
-        "eligibility": ""
-    }
-}
+# ---------------- Dynamic Scheme Finder ----------------
+def find_scheme_from_message(user_message):
+    user_message = user_message.lower()
+
+    for scheme in ALL_SCHEMES:
+        name = str(scheme["Scheme Name"]).lower()
+        category = str(scheme["Category"]).lower()
+
+        if any(word in name for word in user_message.split()) or \
+           any(word in category for word in user_message.split()):
+            return scheme
+
+    return None
 
 # ---------------- Routes ----------------
+# ---------------- Routes ----------------
+
+# Login Page
 @app.route("/")
 def home():
     return render_template("login.html")
 
 @app.route("/login", methods=["POST"])
 def login():
-    username = request.form.get("username")
-    password = request.form.get("password")
-
-    # Simple check (you can upgrade later with DB)
-    if username == "admin" and password == "1234":
-        return redirect(url_for("index"))
-    else:
-        return "Invalid Credentials ❌"
-    
+    return redirect(url_for("index"))
 
 @app.route("/index")
 def index():
     return render_template("index.html")
-
+    
 # ---------------- Eligibility (Selector) ----------------
 @app.route("/eligibility", methods=["POST"])
 def eligibility():
@@ -125,18 +120,14 @@ def eligibility():
     if not schemes_list:
         reply = "No schemes found for your profile."
     else:
-        reply = "You are eligible for:<br><br>"
+        reply = "You are eligible for:\n\n"
 
     for s in schemes_list:
-        reply += f"• {s}"
+        reply += f"• {s}\n"
 
-    reply += "<br><br>Steps to apply:</b><br>1. Visit official website<br>2. Register<br>3. Submit documents"
+    reply += "<br>Steps:<br>1. Visit official website<br>2. Register<br>3. Submit documents"
 
-    # Translate output
-    try:
-        reply = translator.translate(reply, dest=lang).text
-    except:
-        pass
+    reply = translate_text(reply, lang)
 
     return jsonify({"reply": reply})
 
@@ -148,70 +139,41 @@ def chat():
     chat_id = data["chat_id"]
     lang = data.get("lang", "en")
 
-    try:
-        user_message_en = translator.translate(user_message, dest="en").text.lower()
-    except:
-        user_message_en = user_message.lower()
+    user_message_en = translate_text(user_message, "en").lower()
 
-    user_message_lower = user_message.lower()
+    # Redirect to selector
+    if ("eligible" in user_message_en or
+        "eligibility" in user_message_en or
+        "scheme suggest" in user_message_en):
 
-    # 🔥 Redirect to selector if needed
-    if ("eligible" in user_message_en or "eligibility" in user_message_en or
-        "scheme suggest" in user_message_en or "yojana batao" in user_message_lower):
-
-        reply = "Please go to 'Scheme Selector' tab and enter your details."
-
-        try:
-            reply = translator.translate(reply, dest=lang).text
-        except:
-            pass
+        reply = translate_text(
+            "Go to 'Scheme Selector' and enter your details.", lang
+        )
 
         save_chat(chat_id, user_message, reply)
         return jsonify({"reply": reply})
 
-    scheme = None
-
-    if ("kisan" in user_message_en or "pm" in user_message_en or
-        "किसान" in user_message_lower):
-        scheme = "pm kisan"
-
-    elif ("ayushman" in user_message_en or "bharat" in user_message_en or
-          "health" in user_message_en or "insurance" in user_message_en or
-          "आयुष्मान" in user_message_lower):
-        scheme = "ayushman bharat"
-
-    elif ("ujjwala" in user_message_en or "gas" in user_message_en or
-          "उज्वला" in user_message_lower or "उज्जवला" in user_message_lower):
-        scheme = "ujjwala"
-
-    elif ("team" in user_message_en or "" in user_message_en or
-          "amar" in user_message_lower or "उज्जवला" in user_message_lower):
-        scheme = "amar"
+    # 🔥 Dynamic Scheme Search
+    scheme = find_scheme_from_message(user_message_en)
 
     if scheme:
+        name = scheme["Scheme Name"]
+        benefits = scheme["Benefits"]
+        eligibility_text = scheme["Eligibility"]
+        link = scheme["Link"]
 
-        text = schemes[scheme]["info"]
-        eligibility_text = schemes[scheme]["eligibility"]
-        link = schemes[scheme]["link"]
-
-        try:
-            translated_text = translator.translate(text, dest=lang).text
-            translated_eligibility = translator.translate(eligibility_text, dest=lang).text
-            label = translator.translate("Eligibility", dest=lang).text
-        except:
-            translated_text = text
-            translated_eligibility = eligibility_text
-            label = "Eligibility"
-
-        reply = translated_text + "\n" + label + ": " + translated_eligibility
+        reply = f"📌 {name}\n💰 {benefits}\n\nEligibility:\n{eligibility_text}"
+        reply = translate_text(reply, lang)
 
     else:
-        reply = "Ask about schemes like PM Kisan, Ayushman Bharat, Ujjwala."
+        reply = translate_text(
+            "Try asking about farming, education, health, or any scheme name.", lang
+        )
         link = None
 
     save_chat(chat_id, user_message, reply)
 
-    return jsonify({"reply": reply, "link": link if scheme else None})
+    return jsonify({"reply": reply, "link": link})
 
 # ---------------- Chat List ----------------
 @app.route("/all_chats")
@@ -268,8 +230,6 @@ def delete_chat(chat_id):
     return jsonify({"status": "deleted"})
 
 # ---------------- Run ----------------
-import os
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
